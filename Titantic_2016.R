@@ -1,11 +1,11 @@
 library(gmodels)
+library(caret)        # cross-validation for logistic regression
 library(ggplot2)      # supports enhanced graphics
 library(Hmisc)        # impute missing values
 library(car)          # produce VIF statistics
 library(coefplot)     # coefficient plot
 library(plyr)         # for the revalue function 
 library(bestglm)      # cross-validation for logistic regression
-library(caret)        # cross-validation for logistic regression
 library(kernlab)      # assist with SVM
 library(rpart)        # classification and refression trees
 library(partykit)     # treeplots
@@ -102,34 +102,22 @@ barplot(table(train$Embarked), names.arg = c("Cherbourg", "Queenstown", "Southha
 
 # Histograms
 
-# Survived
-ggplot(train, aes(x = Survived)) + geom_histogram(binwidth = 5, fill = "white", colour = "black")
-# Pclass
-ggplot(train, aes(x = Pclass)) + geom_histogram(binwidth = 5, fill = "white", colour = "black")
-# Sex
-ggplot(train, aes(x = Sex)) + geom_histogram(binwidth = 5, fill = "white", colour = "black")
 # Age
-ggplot(train, aes(x = Age)) + geom_histogram(binwidth = 5, fill = "white", colour = "black")
+train.age <- na.omit(train)     # Remove records without an age
+ggplot(train.age, aes(x = Age)) + geom_histogram(binwidth = 5, fill = "white", colour = "black")
 # Siblings/Spouses
 ggplot(train, aes(x = SibSp)) + geom_histogram(binwidth = 1, fill = "white", colour = "black")
 # Parents/children
 ggplot(train, aes(x = Parch)) + geom_histogram(binwidth = 1, fill = "white", colour = "black")
-# Embarked
-ggplot(train, aes(x = Embarked)) + geom_histogram(binwidth = 1, fill = "white", colour = "black")
 
 # Density curves
 
 # Age
-ggplot(train, aes(x = Age)) + geom_line(stat = "density")
+ggplot(train.age, aes(x = Age)) + geom_line(stat = "density")
 # Siblings/Spouses
 ggplot(train, aes(x = SibSp)) + geom_line(stat = "density")
 # Parents/children
 ggplot(train, aes(x = Parch)) + geom_line(stat = "density")
-
-# Histogram with density curve
-
-# Age
-ggplot(train, aes(x = Age, y = ..density..)) + geom_histogram(fill = "cornsilk", colour = "grey60", size = .2) + geom_density() + xlim(35,105)
 
 # Sorted by Index
 
@@ -139,10 +127,10 @@ plot(sort(train$Age), ylab = "Sorted Age")
 # Bivariate Plots #
 
 # Survival rate by age
-ggplot(train, aes(x = Survived, y = Age)) + geom_boxplot()
+ggplot(train.age, aes(x = Survived, y = Age)) + geom_boxplot()
 
 # Passenger traveling class by age.
-ggplot(train, aes(x = Pclass, y = Age)) + geom_boxplot()
+ggplot(train.age, aes(x = Pclass, y = Age)) + geom_boxplot()
 
 # Survival rate by sex
 sex_survival <- table(train$Survived, train$Sex)
@@ -480,8 +468,8 @@ for(i in 1:nrow(test.prep)) {
 }
 
 # FareAdj provides the fare per person, accounting for families making bulk purchases.
-train.prep$FareAdj <- train.prep$Fare/(train.prep$Family)
-test.prep$FareAdj <- test.prep$Fare/(test.prep$Family)
+train.prep$FareAdj <- train.prep$Fare/train.prep$Family
+test.prep$FareAdj <- test.prep$Fare/test.prep$Family
 
 # --------------------------------------------------------------------------
 
@@ -631,6 +619,40 @@ write.csv(predictions[,c("PassengerId", "Survived")],
 
 # -----
 
+# Random Forest Classification - Kaggle Score = 78947. #
+
+set.seed(456)
+titanic.std.rf <- randomForest(Survived ~ Child + Family + Embarked + Sex*Pclass, data = train.prep, mtry = 3, 
+                              importance=T, ntree=20000, na.action=NULL)
+titanic.std.rf
+
+importance(titanic.std.rf)
+varImpPlot(titanic.std.rf)
+
+# Find number of trees necessary to optimize the model's accuracy
+which.min(titanic.std.rf$err.rate[,1])
+
+# Adjust the model with the optimal number of trees
+titanic.std.adj.rf <- randomForest(Survived ~ Child + Family + Embarked + Sex*Pclass, data = train.prep, mtry = 3, 
+                               importance=T, ntree=673, na.action=NULL)
+titanic.std.adj.rf
+
+importance(titanic.std.adj.rf)
+varImpPlot(titanic.std.adj.rf)
+
+# Use the random forest model to generate predictions.
+Survived <- predict(titanic.std.rf, newdata = test.prep, type = "response")
+
+# Move predictions(Survived) into the predictions data frame
+predictions <- as.data.frame(Survived)
+# Add PassengerId column from test file to the predictions data frame
+predictions$PassengerId <- test$PassengerId
+# Write predictions to csv file for submission to Kaggle
+write.csv(predictions[,c("PassengerId", "Survived")], 
+          file="Titanic_Predictions.csv", row.names = FALSE, quote = FALSE)
+
+# -----
+
 # Random Forest Regression - Kaggle Score = .78469 #
 
 # Create a data frame with only tuning parameter for this model.
@@ -708,13 +730,15 @@ write.csv(predictions[,c("PassengerId", "Survived")],
 
 set.seed(456)
 
-titanic.cit <- train(Survived ~ Child + Family + FareAdj + Embarked + Sex + Pclass, data = train.prep,
+titanic.cit <- train(Fate ~ Child + Family + FareAdj + Embarked + Sex + Pclass, data = train.prep,
                       method = "ctree", trControl = crossVal.ctrl, controls = cforest_unbiased(ntree=20000, mtry=7))
 
 titanic.cit
 
 # use the conditional inference tree to generate predictions
 Survived <- predict(titanic.cit, test.prep, type = "raw")
+# Change class back to original format for models using the train() function.
+Survived <- revalue(Survived, c("Survived" = 1, "Perished" = 0))
 
 # Move predictions(Survived) into the predictions data frame.
 predictions <- as.data.frame(Survived)
@@ -737,13 +761,17 @@ KeepColsTest <- c("Sex", "Pclass", "Child", "Family", "FareAdj", "Embarked")
 test.prep.nn <- test.prep
 test.prep.nn <- test.prep.nn[KeepColsTest]
 
+table(train.prep.nn$Fate)
+class(train.prep.nn$Fate)
+
 # Create dummy variables (to convert factors) for training and test data sets
-train.dummies = dummyVars(Fate~., train.prep.nn, fullRank=TRUE)
+train.dummies = dummyVars(Fate ~., train.prep.nn, fullRank=TRUE)
+train.dummies
 test.dummies = dummyVars(~ Sex + Pclass + Child + Family + FareAdj + Embarked, test.prep.nn, fullRank=TRUE)
 # Create data frame for training and test data sets
 train.dummies.df = as.data.frame(predict(train.dummies, newdata=train.prep.nn))
 test.dummies.df = as.data.frame(predict(test.dummies, newdata=test.prep.nn))
-# Convert Fate in the training data set
+# Convert Fate in the training data
 train.dummies.df$Fate = ifelse(train.prep.nn$Fate=="Perished", 0, 1)
 table(train.dummies.df$Fate)
 
@@ -762,7 +790,7 @@ titanic.nn <- neuralnet(titanic.form, data = train.dummies.df,
                          rep = 100,                 # number of random repetitions
                          linear.output = FALSE)     # switch whether to ignore acc.fct; in this case we don't
 
-print(titanic.nn)              # view model details
+print(titanic.nn)             # view model details
 titanic.nn$result.matrix      # summary of the fitted network
 plot(titanic.nn, intercept = TRUE, show.weights = TRUE)     # plot the network
 
